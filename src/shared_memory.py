@@ -64,10 +64,10 @@ def seed_demo():
 
 
 def recommend_next():
-    """Recommend the next person from graph context."""
+    """Recommend using graph-derived evidence."""
     graph = get_graph()
 
-    result = graph.query(
+    candidates_result = graph.query(
         """
         MATCH (u:User {
             name: 'Parth',
@@ -80,69 +80,131 @@ def recommend_next():
 
         WHERE NOT (u)-[:MET]->(p)
 
-        OPTIONAL MATCH
-            (u)-[:INTERESTED_IN]->
-            (direct:Topic {
-                demo_id: 'shared-memory-demo'
-            })
-            <-[:WORKS_ON]-(p)
-
-        WITH
-            u,
-            p,
-            count(DISTINCT direct) * 3
-                AS direct_score
-
-        OPTIONAL MATCH
-            (u)-[:INTERESTED_IN]->
-            (:Topic {
-                demo_id: 'shared-memory-demo'
-            })
-            -[:RELATED_TO]->
-            (related:Topic {
-                demo_id: 'shared-memory-demo'
-            })
-            <-[:WORKS_ON]-(p)
-
-        WITH
-            u,
-            p,
-            direct_score,
-            count(DISTINCT related)
-                AS related_score
-
-        OPTIONAL MATCH
-            (u)-[:MET]->
-            (m:Person {
-                demo_id: 'shared-memory-demo'
-            })
-            -[:RECOMMENDED]->(p)
-
-        WITH
-            p,
-            direct_score,
-            related_score,
-            count(DISTINCT m) * 5
-                AS warm_score
-
-        RETURN
-            p.name,
-            direct_score
-                + related_score
-                + warm_score AS score,
-            direct_score,
-            related_score,
-            warm_score
-
-        ORDER BY score DESC
-        LIMIT 1
+        RETURN p.name
         """
     )
 
-    if not result.result_set:
+    if not candidates_result.result_set:
         return None
 
-    return result.result_set[0]
+    scores = {
+        row[0]: {
+            "direct": 0,
+            "related": 0,
+            "warm": 0,
+        }
+        for row in candidates_result.result_set
+    }
+
+    direct_result = graph.query(
+        """
+        MATCH (u:User {
+            name: 'Parth',
+            demo_id: 'shared-memory-demo'
+        })
+        -[:INTERESTED_IN]->
+        (topic:Topic {
+            demo_id: 'shared-memory-demo'
+        })
+        <-[:WORKS_ON]-
+        (p:Person {
+            demo_id: 'shared-memory-demo'
+        })
+
+        WHERE NOT (u)-[:MET]->(p)
+
+        RETURN
+            p.name,
+            count(DISTINCT topic) * 3
+        """
+    )
+
+    for name, score in direct_result.result_set:
+        if name in scores:
+            scores[name]["direct"] = score
+
+    related_result = graph.query(
+        """
+        MATCH (u:User {
+            name: 'Parth',
+            demo_id: 'shared-memory-demo'
+        })
+        -[:INTERESTED_IN]->
+        (base:Topic {
+            demo_id: 'shared-memory-demo'
+        })
+        -[:RELATED_TO]->
+        (related:Topic {
+            demo_id: 'shared-memory-demo'
+        })
+        <-[:WORKS_ON]-
+        (p:Person {
+            demo_id: 'shared-memory-demo'
+        })
+
+        WHERE NOT (u)-[:MET]->(p)
+
+        RETURN
+            p.name,
+            count(DISTINCT related)
+        """
+    )
+
+    for name, score in related_result.result_set:
+        if name in scores:
+            scores[name]["related"] = score
+
+    warm_result = graph.query(
+        """
+        MATCH (u:User {
+            name: 'Parth',
+            demo_id: 'shared-memory-demo'
+        })
+        -[:MET]->
+        (introducer:Person {
+            demo_id: 'shared-memory-demo'
+        })
+        -[:RECOMMENDED]->
+        (p:Person {
+            demo_id: 'shared-memory-demo'
+        })
+
+        WHERE NOT (u)-[:MET]->(p)
+
+        RETURN
+            p.name,
+            count(DISTINCT introducer) * 5
+        """
+    )
+
+    for name, score in warm_result.result_set:
+        if name in scores:
+            scores[name]["warm"] = score
+
+    best_name = max(
+        scores,
+        key=lambda name: (
+            scores[name]["direct"]
+            + scores[name]["related"]
+            + scores[name]["warm"]
+        ),
+    )
+
+    parts = scores[best_name]
+
+    total = (
+        parts["direct"]
+        + parts["related"]
+        + parts["warm"]
+    )
+
+    return (
+        best_name,
+        total,
+        parts["direct"],
+        parts["related"],
+        parts["warm"],
+    )
 
 
 def log_alice_interaction():
