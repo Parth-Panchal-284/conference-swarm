@@ -10,7 +10,14 @@ from src.graph import get_graph
 
 load_dotenv()
 
-client = OpenAI()
+client = None
+
+
+def _get_client():
+    global client
+    if client is None:
+        client = OpenAI()
+    return client
 
 DEMO_ID = "shared-memory-demo"
 
@@ -71,6 +78,18 @@ MEMORY_SCHEMA = {
                 "additionalProperties": False,
             },
         },
+        "recommended_sessions": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "from_person": {"type": "string"},
+                    "session": {"type": "string"},
+                },
+                "required": ["from_person", "session"],
+                "additionalProperties": False,
+            },
+        },
         "summary": {
             "type": "string"
         },
@@ -79,6 +98,7 @@ MEMORY_SCHEMA = {
         "met_people",
         "recommendations",
         "person_topics",
+        "recommended_sessions",
         "summary",
     ],
     "additionalProperties": False,
@@ -98,7 +118,7 @@ def slugify(value):
 
 
 def extract_memory(text):
-    response = client.responses.create(
+    response = _get_client().responses.create(
         model="gpt-6-luna",
         instructions=(
             "You are a conference memory agent. "
@@ -113,6 +133,8 @@ def extract_memory(text):
             "is explicitly said to work on, focus "
             "on, research, or build something "
             "related to that topic."
+            " recommended_sessions contains sessions "
+            "explicitly suggested by a person."
         ),
         input=text,
         text={
@@ -274,7 +296,6 @@ def persist_memory(text, memory):
             graph,
             item["person"],
         )
-
         involved_person_ids.add(
             person_id
         )
@@ -303,6 +324,17 @@ def persist_memory(text, memory):
                 "topic": topic,
                 "demo_id": DEMO_ID,
             },
+        )
+
+    # Persist recommendations to actual conference sessions.
+    for item in memory.get("recommended_sessions", []):
+        person_id = ensure_person(graph, item["from_person"])
+        involved_person_ids.add(person_id)
+        graph.query(
+            """MATCH (p:Person {person_id: $person_id, demo_id: $demo_id})
+            MATCH (s:Session {name: $session, demo_id: $demo_id})
+            MERGE (p)-[:RECOMMENDED_SESSION]->(s)""",
+            params={"person_id": person_id, "session": item["session"], "demo_id": DEMO_ID},
         )
 
     # Create a deterministic interaction ID so

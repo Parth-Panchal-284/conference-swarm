@@ -13,7 +13,14 @@ from src.memory_agent import (
 
 load_dotenv()
 
-client = OpenAI()
+client = None
+
+
+def _get_client():
+    global client
+    if client is None:
+        client = OpenAI()
+    return client
 
 
 SCOUT_SCHEMA = {
@@ -166,7 +173,7 @@ def extract_people(goal, evidence):
         indent=2,
     )
 
-    response = client.responses.create(
+    response = _get_client().responses.create(
         model="gpt-6-luna",
         instructions=(
     		"You are the Scout Agent for a "
@@ -254,7 +261,8 @@ def persist_scout_results(
                 p.scout_reason =
                     $why_relevant,
                 p.discovered_by =
-                    'Bright Data Scout Agent'
+                    'Bright Data Scout Agent',
+                p.demo_candidate = true
             """,
             params={
                 "person_id": person_id,
