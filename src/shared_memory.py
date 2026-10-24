@@ -43,11 +43,13 @@ def seed_demo():
         })
 
         MERGE (alice:Person {
+            person_id: 'alice',
             name: 'Alice',
             demo_id: 'shared-memory-demo'
         })
 
         MERGE (bob:Person {
+            person_id: 'bob',
             name: 'Bob',
             demo_id: 'shared-memory-demo'
         })
@@ -67,7 +69,7 @@ def recommend_next():
     """Recommend using graph-derived evidence."""
     graph = get_graph()
 
-    candidates_result = graph.query(
+    candidates = graph.query(
         """
         MATCH (u:User {
             name: 'Parth',
@@ -80,23 +82,25 @@ def recommend_next():
 
         WHERE NOT (u)-[:MET]->(p)
 
-        RETURN p.name
+        RETURN p.person_id, p.name
         """
     )
 
-    if not candidates_result.result_set:
+    if not candidates.result_set:
         return None
 
     scores = {
-        row[0]: {
+        person_id: {
+            "name": name,
             "direct": 0,
             "related": 0,
             "warm": 0,
         }
-        for row in candidates_result.result_set
+        for person_id, name
+        in candidates.result_set
     }
 
-    direct_result = graph.query(
+    direct = graph.query(
         """
         MATCH (u:User {
             name: 'Parth',
@@ -114,27 +118,27 @@ def recommend_next():
         WHERE NOT (u)-[:MET]->(p)
 
         RETURN
-            p.name,
+            p.person_id,
             count(DISTINCT topic) * 3
         """
     )
 
-    for name, score in direct_result.result_set:
-        if name in scores:
-            scores[name]["direct"] = score
+    for person_id, score in direct.result_set:
+        if person_id in scores:
+            scores[person_id]["direct"] = score
 
-    related_result = graph.query(
+    related = graph.query(
         """
         MATCH (u:User {
             name: 'Parth',
             demo_id: 'shared-memory-demo'
         })
         -[:INTERESTED_IN]->
-        (base:Topic {
+        (:Topic {
             demo_id: 'shared-memory-demo'
         })
         -[:RELATED_TO]->
-        (related:Topic {
+        (topic:Topic {
             demo_id: 'shared-memory-demo'
         })
         <-[:WORKS_ON]-
@@ -145,25 +149,23 @@ def recommend_next():
         WHERE NOT (u)-[:MET]->(p)
 
         RETURN
-            p.name,
-            count(DISTINCT related)
+            p.person_id,
+            count(DISTINCT topic)
         """
     )
 
-    for name, score in related_result.result_set:
-        if name in scores:
-            scores[name]["related"] = score
+    for person_id, score in related.result_set:
+        if person_id in scores:
+            scores[person_id]["related"] = score
 
-    warm_result = graph.query(
+    warm = graph.query(
         """
         MATCH (u:User {
             name: 'Parth',
             demo_id: 'shared-memory-demo'
         })
         -[:MET]->
-        (introducer:Person {
-            demo_id: 'shared-memory-demo'
-        })
+        (introducer:Person)
         -[:RECOMMENDED]->
         (p:Person {
             demo_id: 'shared-memory-demo'
@@ -172,25 +174,57 @@ def recommend_next():
         WHERE NOT (u)-[:MET]->(p)
 
         RETURN
-            p.name,
+            p.person_id,
             count(DISTINCT introducer) * 5
         """
     )
 
-    for name, score in warm_result.result_set:
-        if name in scores:
-            scores[name]["warm"] = score
+    for person_id, score in warm.result_set:
+        if person_id in scores:
+            scores[person_id]["warm"] = score
 
-    best_name = max(
+    # Re-check eligibility after evidence queries.
+    eligible = graph.query(
+        """
+        MATCH (u:User {
+            name: 'Parth',
+            demo_id: 'shared-memory-demo'
+        })
+
+        MATCH (p:Person {
+            demo_id: 'shared-memory-demo'
+        })
+
+        WHERE NOT (u)-[:MET]->(p)
+
+        RETURN p.person_id
+        """
+    )
+
+    eligible_ids = {
+        row[0]
+        for row in eligible.result_set
+    }
+
+    scores = {
+        person_id: parts
+        for person_id, parts in scores.items()
+        if person_id in eligible_ids
+    }
+
+    if not scores:
+        return None
+
+    best_id = max(
         scores,
-        key=lambda name: (
-            scores[name]["direct"]
-            + scores[name]["related"]
-            + scores[name]["warm"]
+        key=lambda person_id: (
+            scores[person_id]["direct"]
+            + scores[person_id]["related"]
+            + scores[person_id]["warm"]
         ),
     )
 
-    parts = scores[best_name]
+    parts = scores[best_id]
 
     total = (
         parts["direct"]
@@ -199,7 +233,7 @@ def recommend_next():
     )
 
     return (
-        best_name,
+        parts["name"],
         total,
         parts["direct"],
         parts["related"],
