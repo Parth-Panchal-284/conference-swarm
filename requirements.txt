@@ -1,1 +1,2 @@
 FalkorDB==1.2.2
+brightdata-sdk
