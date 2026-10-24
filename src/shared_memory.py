@@ -22,47 +22,10 @@ def reset_demo():
 
 
 def seed_demo():
-    """Seed a small conference knowledge graph."""
-    graph = get_graph()
+    """Seed the dense, deterministic conference graph."""
+    from src.conference_simulator import seed_conference
 
-    graph.query(
-        """
-        MERGE (u:User {
-            name: 'Parth',
-            demo_id: 'shared-memory-demo'
-        })
-
-        MERGE (sparse:Topic {
-            name: 'Sparse Attention',
-            demo_id: 'shared-memory-demo'
-        })
-
-        MERGE (kv:Topic {
-            name: 'KV Cache Optimization',
-            demo_id: 'shared-memory-demo'
-        })
-
-        MERGE (alice:Person {
-            person_id: 'alice',
-            demo_id: 'shared-memory-demo'
-        })
-        SET alice.name = 'Alice'
-
-        MERGE (bob:Person {
-            person_id: 'bob',
-            demo_id: 'shared-memory-demo'
-        })
-        SET bob.name = 'Bob'
-
-        MERGE (u)-[:INTERESTED_IN]->(sparse)
-
-        MERGE (sparse)-[:RELATED_TO]->(kv)
-
-        MERGE (alice)-[:WORKS_ON]->(sparse)
-
-        MERGE (bob)-[:WORKS_ON]->(kv)
-        """
-    )
+    seed_conference()
 
 
 def recommend_next():
@@ -77,7 +40,8 @@ def recommend_next():
         })
 
         MATCH (p:Person {
-            demo_id: 'shared-memory-demo'
+            demo_id: 'shared-memory-demo',
+            demo_candidate: true
         })
 
         WHERE NOT (u)-[:MET]->(p)
@@ -95,6 +59,7 @@ def recommend_next():
             "direct": 0,
             "related": 0,
             "warm": 0,
+            "scout": 0,
         }
         for person_id, name
         in candidates.result_set
@@ -183,6 +148,16 @@ def recommend_next():
         if person_id in scores:
             scores[person_id]["warm"] = score
 
+    scout_matches = graph.query(
+        """MATCH (u:User {name: 'Parth', demo_id: 'shared-memory-demo'})
+        -[:SCOUT_MATCH]->(p:Person {demo_id: 'shared-memory-demo', demo_candidate: true})
+        WHERE NOT (u)-[:MET]->(p)
+        RETURN p.person_id, count(DISTINCT p) * 4"""
+    )
+    for person_id, score in scout_matches.result_set:
+        if person_id in scores:
+            scores[person_id]["scout"] = score
+
     # Re-check eligibility after evidence queries.
     eligible = graph.query(
         """
@@ -192,7 +167,8 @@ def recommend_next():
         })
 
         MATCH (p:Person {
-            demo_id: 'shared-memory-demo'
+            demo_id: 'shared-memory-demo',
+            demo_candidate: true
         })
 
         WHERE NOT (u)-[:MET]->(p)
@@ -221,6 +197,10 @@ def recommend_next():
             scores[person_id]["direct"]
             + scores[person_id]["related"]
             + scores[person_id]["warm"]
+            + scores[person_id]["scout"],
+            scores[person_id]["scout"],
+            scores[person_id]["direct"],
+            scores[person_id]["name"],
         ),
     )
 
@@ -230,6 +210,7 @@ def recommend_next():
         parts["direct"]
         + parts["related"]
         + parts["warm"]
+        + parts["scout"]
     )
 
     return (
@@ -238,6 +219,7 @@ def recommend_next():
         parts["direct"],
         parts["related"],
         parts["warm"],
+        parts["scout"],
     )
 
 
@@ -305,6 +287,7 @@ def print_recommendation(label):
         direct,
         related,
         warm,
+        scout,
     ) = recommendation
 
     print(f"Recommendation: {name}")
@@ -314,7 +297,8 @@ def print_recommendation(label):
         "Reasoning: "
         f"direct={direct}, "
         f"related={related}, "
-        f"warm_intro={warm}"
+        f"warm_intro={warm}, "
+        f"live_scout={scout}"
     )
 
     return name
