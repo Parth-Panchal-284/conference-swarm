@@ -1,2 +1,6 @@
 FalkorDB==1.2.2
+openai
+python-dotenv
+streamlit
+graphviz
 brightdata-sdk
