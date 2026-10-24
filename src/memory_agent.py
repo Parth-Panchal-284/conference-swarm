@@ -18,18 +18,20 @@ DEMO_ID = "shared-memory-demo"
 MEMORY_SCHEMA = {
     "type": "object",
     "properties": {
-        "met_person": {
-            "anyOf": [
-                {
-                    "type": "object",
-                    "properties": {
-                        "name": {"type": "string"}
-                    },
-                    "required": ["name"],
-                    "additionalProperties": False,
+        "met_people": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "name": {
+                        "type": "string"
+                    }
                 },
-                {"type": "null"},
-            ]
+                "required": [
+                    "name"
+                ],
+                "additionalProperties": False,
+            },
         },
         "recommendations": {
             "type": "array",
@@ -74,7 +76,7 @@ MEMORY_SCHEMA = {
         },
     },
     "required": [
-        "met_person",
+        "met_people",
         "recommendations",
         "person_topics",
         "summary",
@@ -102,11 +104,15 @@ def extract_memory(text):
             "You are a conference memory agent. "
             "Extract only facts explicitly stated "
             "by the user. Do not invent facts. "
+            "met_people must contain every person "
+            "the user explicitly says they met. "
             "A recommendation includes one person "
-	    "suggesting, referring, introducing, or "
-	    "telling the user to meet another person. "
-            "person_topics means a person is said "
-            "to work on or focus on that topic."
+            "suggesting, referring, introducing, "
+            "or telling the user to meet another "
+            "person. person_topics means a person "
+            "is explicitly said to work on, focus "
+            "on, research, or build something "
+            "related to that topic."
         ),
         input=text,
         text={
@@ -146,6 +152,25 @@ def ensure_person(graph, name):
     return person_id
 
 
+def ensure_topic(graph, topic):
+    normalized_topic = topic.strip()
+
+    graph.query(
+        """
+        MERGE (t:Topic {
+            name: $topic,
+            demo_id: $demo_id
+        })
+        """,
+        params={
+            "topic": normalized_topic,
+            "demo_id": DEMO_ID,
+        },
+    )
+
+    return normalized_topic
+
+
 def persist_memory(text, memory):
     graph = get_graph()
 
@@ -161,14 +186,17 @@ def persist_memory(text, memory):
         },
     )
 
-    met_person = memory.get(
-        "met_person"
-    )
+    involved_person_ids = set()
 
-    if met_person:
+    # Persist every explicitly met person.
+    for met_person in memory["met_people"]:
         person_id = ensure_person(
             graph,
             met_person["name"],
+        )
+
+        involved_person_ids.add(
+            person_id
         )
 
         graph.query(
@@ -191,6 +219,7 @@ def persist_memory(text, memory):
             },
         )
 
+    # Persist warm introductions / recommendations.
     for recommendation in memory[
         "recommendations"
     ]:
@@ -206,6 +235,14 @@ def persist_memory(text, memory):
             recommendation[
                 "to_person"
             ],
+        )
+
+        involved_person_ids.add(
+            from_id
+        )
+
+        involved_person_ids.add(
+            to_id
         )
 
         graph.query(
@@ -229,10 +266,22 @@ def persist_memory(text, memory):
             },
         )
 
-    for item in memory["person_topics"]:
+    # Persist person -> topic knowledge.
+    for item in memory[
+        "person_topics"
+    ]:
         person_id = ensure_person(
             graph,
             item["person"],
+        )
+
+        involved_person_ids.add(
+            person_id
+        )
+
+        topic = ensure_topic(
+            graph,
+            item["topic"],
         )
 
         graph.query(
@@ -242,7 +291,7 @@ def persist_memory(text, memory):
                 demo_id: $demo_id
             })
 
-            MERGE (t:Topic {
+            MATCH (t:Topic {
                 name: $topic,
                 demo_id: $demo_id
             })
@@ -251,11 +300,14 @@ def persist_memory(text, memory):
             """,
             params={
                 "person_id": person_id,
-                "topic": item["topic"],
+                "topic": topic,
                 "demo_id": DEMO_ID,
             },
         )
 
+    # Create a deterministic interaction ID so
+    # submitting the same memory twice does not
+    # create duplicate interaction nodes.
     interaction_id = (
         "memory-"
         + hashlib.sha1(
@@ -292,9 +344,39 @@ def persist_memory(text, memory):
         },
     )
 
+    # Link the memory itself to all people
+    # involved in the interaction.
+    for person_id in involved_person_ids:
+        graph.query(
+            """
+            MATCH (m:Interaction {
+                interaction_id:
+                    $interaction_id,
+                demo_id: $demo_id
+            })
+
+            MATCH (p:Person {
+                person_id: $person_id,
+                demo_id: $demo_id
+            })
+
+            MERGE (m)-[:INVOLVES]->(p)
+            """,
+            params={
+                "interaction_id":
+                    interaction_id,
+                "person_id":
+                    person_id,
+                "demo_id":
+                    DEMO_ID,
+            },
+        )
+
 
 def remember_interaction(text):
-    memory = extract_memory(text)
+    memory = extract_memory(
+        text
+    )
 
     persist_memory(
         text,
