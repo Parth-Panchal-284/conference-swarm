@@ -44,15 +44,15 @@ def seed_demo():
 
         MERGE (alice:Person {
             person_id: 'alice',
-            name: 'Alice',
             demo_id: 'shared-memory-demo'
         })
+        SET alice.name = 'Alice'
 
         MERGE (bob:Person {
             person_id: 'bob',
-            name: 'Bob',
             demo_id: 'shared-memory-demo'
         })
+        SET bob.name = 'Bob'
 
         MERGE (u)-[:INTERESTED_IN]->(sparse)
 
@@ -253,12 +253,12 @@ def log_alice_interaction():
         })
 
         MATCH (alice:Person {
-            name: 'Alice',
+            person_id: 'alice',
             demo_id: 'shared-memory-demo'
         })
 
         MATCH (bob:Person {
-            name: 'Bob',
+            person_id: 'bob',
             demo_id: 'shared-memory-demo'
         })
 
